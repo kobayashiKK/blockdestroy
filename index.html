@@ -200,11 +200,42 @@ document.getElementById('mute').addEventListener('click', (e)=>{
   document.getElementById('mute').textContent = muted ? '🔇' : '🔊';
 });
 
+// ---------- BGM (simple step sequencer) ----------
+const BGM = {
+  timer:null, step:0,
+  prog:[261.63, 392.00, 440.00, 349.23], // I–V–vi–IV in C
+  pent:[0,2,4,7,9,12],
+  start(){ if(this.timer||!audioCtx) return; this.step=0; this.timer=setInterval(()=>this.tick(), 125); },
+  stop(){ if(this.timer){ clearInterval(this.timer); this.timer=null; } },
+  tick(){
+    if(muted || !audioCtx) return;
+    const bar = Math.floor(this.step/8) % this.prog.length;
+    const root = this.prog[bar];
+    const s = this.step % 8;
+    if(s%4===0) beep(root/2, 0.24, 'triangle', 0.09);            // bass
+    if(fever || s%2===0){                                         // arpeggio (denser in fever)
+      const n = this.pent[(this.step*3) % this.pent.length];
+      beep(root*Math.pow(2,n/12), fever?0.1:0.13, 'sine', fever?0.085:0.05);
+    }
+    if(fever && s%2===1){                                         // sparkle layer during fever
+      const n = this.pent[(this.step*5) % this.pent.length];
+      beep(root*2*Math.pow(2,n/12), 0.08, 'square', 0.05);
+    }
+    this.step++;
+  }
+};
+// pleasant chord stab for combo milestones
+function chord(rootHz){
+  [0,4,7,12].forEach((iv,i)=> setTimeout(()=>beep(rootHz*Math.pow(2,iv/12), 0.25, 'sine', 0.12), i*35));
+}
+
 // ---------- Game state ----------
 const COLORS = ['#ff2e88','#ff7b2e','#ffd23f','#46ff9c','#3fd2ff','#a25bff'];
 let state = 'menu'; // menu, play, dead, win
 let score = 0, hiScore = +(localStorage.getItem('db_hi')||0), level = 1, lives = 3;
 let combo = 0, comboTimer = 0;
+let fever = false, feverTimer = 0, feverGauge = 0; // FEVER mode meter
+let cheerCD = 0;                                   // cheer-message cooldown
 let shake = 0, flash = 0, flashColor = '255,255,255';
 let particles = [], floaters = [], powerups = [], balls = [], bricks = [];
 let trail = [];
@@ -421,6 +452,7 @@ function startGame(){
   initAudio();
   if(audioCtx && audioCtx.state==='suspended') audioCtx.resume();
   score = 0; level = 1; lives = 3; combo = 0;
+  fever = false; feverTimer = 0; feverGauge = 0;
   particles=[]; floaters=[]; powerups=[]; trail=[];
   paused = false; catchArmed = 0;
   document.getElementById('pauseScreen').classList.add('hidden');
@@ -430,6 +462,7 @@ function startGame(){
   state = 'play';
   document.getElementById('overlay').classList.add('hidden');
   updateHUD();
+  BGM.start();
 }
 
 function nextLevel(){
@@ -471,6 +504,17 @@ function bigFloater(text,x,y,color){
 }
 function smallFloater(text,x,y,color){
   floaters.push({text,x,y,color,life:1,vy:-1.2,scale:1, big:false});
+}
+// cheerful encouraging messages on brick breaks
+const CHEERS = ['いいね！','ナイス！','その調子！','最高！','すごい！','天才！','やったね！',
+  'キミならできる！','ファイト！','ステキ！','うまい！','絶好調！','かわいい〜','えらい！',
+  'もっといける！','ノってきた！','スッキリ！','気持ちいい〜'];
+function cheer(x,y,force){
+  if(!force && cheerCD>0) return;
+  cheerCD = 0.7;
+  const msg = CHEERS[(Math.random()*CHEERS.length)|0];
+  floaters.push({text:msg, x:Math.max(70,Math.min(W-70,x)), y, color:COLORS[(Math.random()*COLORS.length)|0],
+    life:1, vy:-0.8, scale:0, big:true});
 }
 
 function showCombo(n){
@@ -537,7 +581,8 @@ function togglePause(force){
   if(state!=='play') { paused=false; document.getElementById('pauseScreen').classList.add('hidden'); return; }
   paused = (force===undefined) ? !paused : force;
   document.getElementById('pauseScreen').classList.toggle('hidden', !paused);
-  if(!paused && audioCtx && audioCtx.state==='suspended') audioCtx.resume();
+  if(paused){ BGM.stop(); }
+  else { if(audioCtx && audioCtx.state==='suspended') audioCtx.resume(); BGM.start(); }
 }
 document.getElementById('pauseBtn').addEventListener('click', (e)=>{ e.stopPropagation(); togglePause(); });
 document.getElementById('resumeBtn').addEventListener('click', (e)=>{ e.stopPropagation(); togglePause(false); });
@@ -590,7 +635,12 @@ function powerIcon(t){ return {wide:'↔',multi:'✦',fire:'🔥',slow:'🐢',ca
 // ---------- Update ----------
 function update(dt){
   if(paused) return;
-  bgHue = (bgHue + 0.2) % 360;
+  bgHue = (bgHue + (fever?1.6:0.2)) % 360;   // background spins faster in FEVER
+  if(cheerCD>0) cheerCD -= dt;
+  if(state==='play'){
+    if(fever){ feverTimer -= dt; if(feverTimer<=0){ fever=false; feverGauge=0; bigFloater('ナイスファイト！',W/2,H*0.42,'#46ff9c'); } }
+    else { feverGauge = Math.max(0, feverGauge - dt*0.10); }
+  }
 
   // paddle keyboard
   if(keyL) paddle.targetX -= 8;
@@ -677,7 +727,7 @@ function update(dt){
         const overlapT = (b.y+b.r) - br.y;
         const overlapB = (br.y+br.h) - (b.y-b.r);
         const minO = Math.min(overlapL,overlapR,overlapT,overlapB);
-        const through = b.fire || b.pierce;   // pass straight through bricks
+        const through = b.fire || b.pierce || fever;   // FEVER balls also pierce
         if(!through){
           if(minO===overlapT || minO===overlapB) b.vy*=-1; else b.vx*=-1;
         }
@@ -715,25 +765,36 @@ function hitBrick(br, ball){
   br.alive = false;
   // combo
   combo++; comboTimer = 1.4;
-  const gain = 50 * Math.max(1, combo);
+  const gain = 50 * Math.max(1, combo) * (fever ? 2 : 1);  // FEVER doubles score
   score += gain;
   if(score>hiScore){ hiScore=score; localStorage.setItem('db_hi',hiScore); }
   updateHUD();
 
+  // FEVER gauge fills as you break; fills faster on combos
+  if(!fever){
+    feverGauge += 0.045 + combo*0.004;
+    if(feverGauge>=1) startFever();
+  }
+
   // juicy feedback
-  spawnParticle(br.x+br.w/2, br.y+br.h/2, br.color, 18, 6);
-  smallFloater('+'+gain, br.x+br.w/2, br.y, br.color);
-  shake = Math.max(shake, 4 + Math.min(combo,10));
+  spawnParticle(br.x+br.w/2, br.y+br.h/2, br.color, fever?26:18, fever?8:6);
+  smallFloater('+'+gain, br.x+br.w/2, br.y, fever?'#fff' : br.color);
+  shake = Math.max(shake, 4 + Math.min(combo,10) + (fever?3:0));
   flash = Math.max(flash, 0.12 + Math.min(combo*0.02,0.25));
-  flashColor = hexToRgb(br.color);
+  flashColor = fever ? (Math.floor(bgHue)%2 ? '255,80,200':'80,220,255') : hexToRgb(br.color);
 
   // rising pitch with combo
   const f = 440 * Math.pow(1.0595, Math.min(combo,24));
   beep(f, 0.08, 'square', 0.16);
+
+  // encouraging message now and then (so breaking always feels rewarding)
+  cheer(br.x+br.w/2, br.y-6);
+
   if(combo>=3){ showCombo(combo); }
   if(combo===5||combo===10||combo===15||combo>=20){
     bigFloater(combo>=20?'UNSTOPPABLE!':(combo>=15?'INSANE!':(combo>=10?'AMAZING!':'NICE!')),
       W/2, H*0.32, '#ffd23f');
+    chord(523.25);
     noiseBurst(0.12,0.18);
     for(let i=0;i<24;i++) spawnParticle(W/2,H*0.32,COLORS[i%6],1,8);
   }
@@ -741,15 +802,31 @@ function hitBrick(br, ball){
   maybeDropPowerup(br.x+br.w/2, br.y+br.h/2);
 }
 
+function startFever(){
+  fever = true; feverTimer = 6; feverGauge = 1;
+  bigFloater('🔥 FEVER !! 🔥', W/2, H*0.42, '#ffd23f');
+  cheer(W/2, H*0.5, true);
+  flash = 0.7; flashColor = '255,200,60';
+  shake = Math.max(shake, 12);
+  noiseBurst(0.25, 0.22);
+  chord(659.25);
+  for(let i=0;i<80;i++) spawnParticle(Math.random()*W, Math.random()*H, COLORS[i%6], 1, 9);
+}
+
+const MISS_CHEERS = ['ドンマイ！','つぎいこう！','おしい！','まだまだ！','切り替えてこ！'];
 function loseLife(){
   lives--;
-  combo=0;
+  combo=0; fever=false; feverTimer=0; feverGauge=0;
   updateHUD();
   shake=18; flash=0.5; flashColor='255,40,80';
   noiseBurst(0.25,0.3);
   beep(160,0.3,'sawtooth',0.2);
   if(lives<=0){ gameOver(); }
-  else { resetBallOnPaddle(); }
+  else {
+    floaters.push({text:MISS_CHEERS[(Math.random()*MISS_CHEERS.length)|0], x:W/2, y:H*0.45,
+      color:'#ffd23f', life:1, vy:-0.7, scale:0, big:true});
+    resetBallOnPaddle();
+  }
 }
 
 function gameOver(){
@@ -854,10 +931,15 @@ function draw(){
 
   // balls
   for(const b of balls){
-    const col = b.fire ? '#ffb02e' : (b.pierce ? '#7fe9ff' : '#fff');
-    ctx.shadowColor = b.fire ? '#ff7b2e' : (b.pierce ? '#3fd2ff' : '#fff');
-    ctx.shadowBlur = b.pierce ? 22 : 18;
-    ctx.fillStyle = col;
+    if(fever){
+      const hue = (bgHue + b.x) % 360;
+      ctx.shadowColor = `hsl(${hue},100%,60%)`; ctx.shadowBlur = 26;
+      ctx.fillStyle = `hsl(${hue},100%,75%)`;
+    } else {
+      ctx.fillStyle = b.fire ? '#ffb02e' : (b.pierce ? '#7fe9ff' : '#fff');
+      ctx.shadowColor = b.fire ? '#ff7b2e' : (b.pierce ? '#3fd2ff' : '#fff');
+      ctx.shadowBlur = b.pierce ? 22 : 18;
+    }
     ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2); ctx.fill();
     ctx.shadowBlur=0;
   }
@@ -939,6 +1021,36 @@ function draw(){
   if(flash>0){
     ctx.fillStyle=`rgba(${flashColor},${flash*0.5})`;
     ctx.fillRect(0,0,W,H);
+  }
+
+  // FEVER rainbow vignette
+  if(fever){
+    const a = 0.12 + 0.05*Math.sin(Date.now()/120);
+    const vg = ctx.createRadialGradient(W/2,H/2,H*0.25, W/2,H/2,H*0.62);
+    vg.addColorStop(0,'rgba(0,0,0,0)');
+    vg.addColorStop(1,`hsla(${bgHue%360},100%,55%,${a})`);
+    ctx.fillStyle=vg; ctx.fillRect(0,0,W,H);
+  }
+
+  // FEVER gauge / timer bar (top center, under HUD)
+  if(state==='play' || state==='reveal'){
+    const bw=160, bh=8, bx=(W-bw)/2, by=58;
+    ctx.fillStyle='rgba(255,255,255,0.12)';
+    roundRect(bx,by,bw,bh,4); ctx.fill();
+    if(fever){
+      const p = Math.max(0, feverTimer/6);
+      const grd = ctx.createLinearGradient(bx,0,bx+bw,0);
+      grd.addColorStop(0,'#ff2e88'); grd.addColorStop(0.5,'#ffd23f'); grd.addColorStop(1,'#3fd2ff');
+      ctx.fillStyle=grd; roundRect(bx,by,bw*p,bh,4); ctx.fill();
+      ctx.globalAlpha=0.6+0.4*Math.sin(Date.now()/100);
+      ctx.fillStyle='#fff'; ctx.font='900 italic 13px sans-serif'; ctx.textAlign='center';
+      ctx.fillText('🔥 FEVER 🔥', W/2, by-6);
+      ctx.globalAlpha=1;
+    } else {
+      ctx.fillStyle='#ff9f1c'; roundRect(bx,by,bw*feverGauge,bh,4); ctx.fill();
+      if(feverGauge>0.05){ ctx.fillStyle='rgba(255,255,255,0.7)'; ctx.font='bold 10px sans-serif'; ctx.textAlign='center';
+        ctx.fillText('FEVER', W/2, by-4); }
+    }
   }
 }
 
