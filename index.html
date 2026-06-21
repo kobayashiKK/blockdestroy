@@ -106,7 +106,7 @@
 
 <div id="overlay">
   <h1>DOPAMINE<br>BREAKER</h1>
-  <p>ブロックを全部ぶっ壊せ！<br>連続ヒットでコンボ爆発 🔥<br><span class="hi">PC:</span> マウス / ← → &nbsp;&nbsp; <span class="hi">スマホ:</span> 指でスライド</p>
+  <p>ブロックを壊して、隠れた動物を救い出せ！🐾<br>連続ヒットでコンボ爆発 🔥<br><span class="hi">PC:</span> マウス / ← → &nbsp;&nbsp; <span class="hi">スマホ:</span> 指でスライド</p>
   <button id="btn">▶ START</button>
   <div id="hint">タップ / クリックでも発射</div>
 </div>
@@ -183,11 +183,144 @@ let shake = 0, flash = 0, flashColor = '255,255,255';
 let particles = [], floaters = [], powerups = [], balls = [], bricks = [];
 let trail = [];
 let bgHue = 0;
+let regionTop = 84, regionBottom = 400, currentAnimal = null, revealTimer = 0;
 
 const paddle = { w: 90, h: 14, x: W/2, y: H-50, targetX: W/2 };
 let stickyLaunch = false; // ball waiting on paddle
 
 function makeBall(x,y,vx,vy){ return {x,y,vx,vy,r:8,fire:0}; }
+
+// ---------- Hidden animal pictures (drawn with canvas) ----------
+const PICH = 800;            // logical playfield height (constant given fixed aspect)
+const PSCALE = 2;            // supersample for crisp artwork
+const picCanvas = document.createElement('canvas');
+picCanvas.width = W * PSCALE; picCanvas.height = PICH * PSCALE;
+const pctx = picCanvas.getContext('2d');
+
+// small drawing helpers (operate on a given context)
+function tri(g,x1,y1,x2,y2,x3,y3){ g.beginPath(); g.moveTo(x1,y1); g.lineTo(x2,y2); g.lineTo(x3,y3); g.closePath(); g.fill(); }
+function blob(g,x,y,rx,ry,col){ g.fillStyle=col; g.beginPath(); g.ellipse(x,y,rx,ry,0,0,Math.PI*2); g.fill(); }
+function eye(g,x,y,r){ g.fillStyle='#2b2b2b'; g.beginPath(); g.arc(x,y,r,0,Math.PI*2); g.fill();
+  g.fillStyle='#fff'; g.beginPath(); g.arc(x-r*0.3,y-r*0.35,r*0.4,0,Math.PI*2); g.fill(); }
+function blush(g,x,y,r){ g.fillStyle='rgba(255,120,150,0.5)'; g.beginPath(); g.ellipse(x,y,r,r*0.6,0,0,Math.PI*2); g.fill(); }
+
+function catDraw(g,cx,cy,s){
+  const c='#f4a259', ic='#ffd9b0';
+  g.fillStyle=c;
+  tri(g,cx-s*0.78,cy-s*0.35,cx-s*0.55,cy-s*1.05,cx-s*0.12,cy-s*0.55);
+  tri(g,cx+s*0.78,cy-s*0.35,cx+s*0.55,cy-s*1.05,cx+s*0.12,cy-s*0.55);
+  g.fillStyle=ic;
+  tri(g,cx-s*0.6,cy-s*0.42,cx-s*0.5,cy-s*0.85,cx-s*0.28,cy-s*0.52);
+  tri(g,cx+s*0.6,cy-s*0.42,cx+s*0.5,cy-s*0.85,cx+s*0.28,cy-s*0.52);
+  blob(g,cx,cy,s,s*0.86,c);
+  eye(g,cx-s*0.36,cy-s*0.02,s*0.15); eye(g,cx+s*0.36,cy-s*0.02,s*0.15);
+  blush(g,cx-s*0.55,cy+s*0.28,s*0.18); blush(g,cx+s*0.55,cy+s*0.28,s*0.18);
+  g.fillStyle='#e26d8a'; tri(g,cx-s*0.08,cy+s*0.18,cx+s*0.08,cy+s*0.18,cx,cy+s*0.3);
+  g.strokeStyle='#5b3a25'; g.lineWidth=s*0.035; g.lineCap='round';
+  for(const d of [-1,1]){
+    g.beginPath(); g.moveTo(cx+d*s*0.18,cy+s*0.26); g.lineTo(cx+d*s*0.72,cy+s*0.16); g.stroke();
+    g.beginPath(); g.moveTo(cx+d*s*0.18,cy+s*0.32); g.lineTo(cx+d*s*0.74,cy+s*0.38); g.stroke();
+  }
+}
+function dogDraw(g,cx,cy,s){
+  const c='#c08a52';
+  blob(g,cx-s*0.82,cy-s*0.05,s*0.3,s*0.62,'#6e4a2b');
+  blob(g,cx+s*0.82,cy-s*0.05,s*0.3,s*0.62,'#6e4a2b');
+  blob(g,cx,cy,s,s*0.86,c);
+  blob(g,cx,cy+s*0.35,s*0.5,s*0.4,'#f0e0c8');
+  eye(g,cx-s*0.32,cy-s*0.1,s*0.14); eye(g,cx+s*0.32,cy-s*0.1,s*0.14);
+  blob(g,cx,cy+s*0.18,s*0.13,s*0.1,'#3a2a20');
+  g.strokeStyle='#3a2a20'; g.lineWidth=s*0.04; g.lineCap='round';
+  g.beginPath(); g.moveTo(cx,cy+s*0.26); g.lineTo(cx,cy+s*0.46); g.stroke();
+  blush(g,cx-s*0.55,cy+s*0.18,s*0.16); blush(g,cx+s*0.55,cy+s*0.18,s*0.16);
+}
+function rabbitDraw(g,cx,cy,s){
+  const c='#fdfdff', ic='#ffc6da';
+  blob(g,cx-s*0.32,cy-s*0.95,s*0.18,s*0.62,c);
+  blob(g,cx+s*0.32,cy-s*0.95,s*0.18,s*0.62,c);
+  blob(g,cx-s*0.32,cy-s*0.95,s*0.09,s*0.46,ic);
+  blob(g,cx+s*0.32,cy-s*0.95,s*0.09,s*0.46,ic);
+  blob(g,cx,cy,s*0.92,s*0.86,c);
+  eye(g,cx-s*0.34,cy-s*0.02,s*0.14); eye(g,cx+s*0.34,cy-s*0.02,s*0.14);
+  g.fillStyle='#e26d8a'; tri(g,cx-s*0.07,cy+s*0.16,cx+s*0.07,cy+s*0.16,cx,cy+s*0.27);
+  blush(g,cx-s*0.52,cy+s*0.26,s*0.16); blush(g,cx+s*0.52,cy+s*0.26,s*0.16);
+}
+function bearDraw(g,cx,cy,s){
+  const c='#b0814c';
+  blob(g,cx-s*0.62,cy-s*0.68,s*0.32,s*0.32,c);
+  blob(g,cx+s*0.62,cy-s*0.68,s*0.32,s*0.32,c);
+  blob(g,cx-s*0.62,cy-s*0.68,s*0.16,s*0.16,'#d8b88a');
+  blob(g,cx+s*0.62,cy-s*0.68,s*0.16,s*0.16,'#d8b88a');
+  blob(g,cx,cy,s,s*0.92,c);
+  blob(g,cx,cy+s*0.28,s*0.46,s*0.38,'#e6cda6');
+  eye(g,cx-s*0.3,cy-s*0.08,s*0.13); eye(g,cx+s*0.3,cy-s*0.08,s*0.13);
+  blob(g,cx,cy+s*0.16,s*0.12,s*0.09,'#3a2a20');
+}
+function pandaDraw(g,cx,cy,s){
+  blob(g,cx-s*0.6,cy-s*0.66,s*0.28,s*0.28,'#2b2b2b');
+  blob(g,cx+s*0.6,cy-s*0.66,s*0.28,s*0.28,'#2b2b2b');
+  blob(g,cx,cy,s,s*0.9,'#fff');
+  g.fillStyle='#2b2b2b';
+  g.beginPath(); g.ellipse(cx-s*0.34,cy-s*0.02,s*0.2,s*0.27,-0.3,0,Math.PI*2); g.fill();
+  g.beginPath(); g.ellipse(cx+s*0.34,cy-s*0.02,s*0.2,s*0.27,0.3,0,Math.PI*2); g.fill();
+  eye(g,cx-s*0.34,cy-s*0.02,s*0.1); eye(g,cx+s*0.34,cy-s*0.02,s*0.1);
+  blob(g,cx,cy+s*0.2,s*0.1,s*0.08,'#2b2b2b');
+}
+function frogDraw(g,cx,cy,s){
+  const c='#7ac74f';
+  blob(g,cx-s*0.42,cy-s*0.55,s*0.3,s*0.3,c);
+  blob(g,cx+s*0.42,cy-s*0.55,s*0.3,s*0.3,c);
+  g.fillStyle='#fff'; g.beginPath(); g.arc(cx-s*0.42,cy-s*0.6,s*0.16,0,7); g.fill();
+  g.beginPath(); g.arc(cx+s*0.42,cy-s*0.6,s*0.16,0,7); g.fill();
+  g.fillStyle='#222'; g.beginPath(); g.arc(cx-s*0.42,cy-s*0.58,s*0.08,0,7); g.fill();
+  g.beginPath(); g.arc(cx+s*0.42,cy-s*0.58,s*0.08,0,7); g.fill();
+  blob(g,cx,cy+s*0.05,s,s*0.78,c);
+  g.strokeStyle='#3a7a22'; g.lineWidth=s*0.05; g.lineCap='round';
+  g.beginPath(); g.arc(cx,cy+s*0.1,s*0.5,0.12*Math.PI,0.88*Math.PI); g.stroke();
+  blush(g,cx-s*0.55,cy+s*0.22,s*0.16); blush(g,cx+s*0.55,cy+s*0.22,s*0.16);
+}
+function pigDraw(g,cx,cy,s){
+  const c='#f7a9c4';
+  g.fillStyle=c;
+  tri(g,cx-s*0.7,cy-s*0.5,cx-s*0.4,cy-s*0.95,cx-s*0.2,cy-s*0.5);
+  tri(g,cx+s*0.7,cy-s*0.5,cx+s*0.4,cy-s*0.95,cx+s*0.2,cy-s*0.5);
+  blob(g,cx,cy,s,s*0.86,c);
+  blob(g,cx,cy+s*0.22,s*0.34,s*0.26,'#ef8fb0');
+  blob(g,cx-s*0.12,cy+s*0.22,s*0.06,s*0.09,'#c45b80');
+  blob(g,cx+s*0.12,cy+s*0.22,s*0.06,s*0.09,'#c45b80');
+  eye(g,cx-s*0.32,cy-s*0.1,s*0.13); eye(g,cx+s*0.32,cy-s*0.1,s*0.13);
+  blush(g,cx-s*0.55,cy+s*0.12,s*0.16); blush(g,cx+s*0.55,cy+s*0.12,s*0.16);
+}
+function chickDraw(g,cx,cy,s){
+  const c='#ffd23f';
+  g.fillStyle=c; tri(g,cx-s*0.12,cy-s*0.78,cx+s*0.12,cy-s*0.78,cx,cy-s*1.05);
+  blob(g,cx,cy,s,s*0.9,c);
+  eye(g,cx-s*0.28,cy-s*0.1,s*0.13); eye(g,cx+s*0.28,cy-s*0.1,s*0.13);
+  g.fillStyle='#ff9f1c'; tri(g,cx-s*0.12,cy+s*0.08,cx+s*0.12,cy+s*0.08,cx,cy+s*0.3);
+  blush(g,cx-s*0.5,cy+s*0.2,s*0.15); blush(g,cx+s*0.5,cy+s*0.2,s*0.15);
+}
+
+const ANIMALS = [
+  {name:'ねこ',   bg:'#fff3e0', bg2:'#ffe2ec', draw:catDraw},
+  {name:'いぬ',   bg:'#fff1de', bg2:'#ffe9cf', draw:dogDraw},
+  {name:'うさぎ', bg:'#fdf0f6', bg2:'#eef3ff', draw:rabbitDraw},
+  {name:'くま',   bg:'#fff4e2', bg2:'#ffeccf', draw:bearDraw},
+  {name:'ぱんだ', bg:'#eef4ff', bg2:'#f5f5f5', draw:pandaDraw},
+  {name:'かえる', bg:'#eafff0', bg2:'#e2f7ff', draw:frogDraw},
+  {name:'ぶた',   bg:'#fff0f5', bg2:'#ffe6f0', draw:pigDraw},
+  {name:'ひよこ', bg:'#fffbe0', bg2:'#fff4d6', draw:chickDraw},
+];
+
+function renderAnimal(an){
+  pctx.setTransform(PSCALE,0,0,PSCALE,0,0);
+  pctx.clearRect(0,0,W,PICH);
+  const cx = W/2, cy = (regionTop+regionBottom)/2, s = (regionBottom-regionTop)*0.46;
+  const bd = pctx.createRadialGradient(cx,cy,s*0.2,cx,cy,s*1.9);
+  bd.addColorStop(0, an.bg); bd.addColorStop(1, an.bg2);
+  pctx.fillStyle = bd;
+  pctx.fillRect(0, regionTop-12, W, (regionBottom-regionTop)+24);
+  an.draw(pctx, cx, cy, s);
+}
 
 function buildLevel(lv){
   bricks = [];
@@ -210,6 +343,10 @@ function buildLevel(lv){
       });
     }
   }
+  regionTop = top - 6;
+  regionBottom = top + (rows-1)*(bh+gap) + bh + 6;
+  currentAnimal = ANIMALS[(lv-1) % ANIMALS.length];
+  renderAnimal(currentAnimal);
 }
 
 function resetBallOnPaddle(){
@@ -235,10 +372,24 @@ function nextLevel(){
   paddle.w = Math.max(60, paddle.w);
   buildLevel(level);
   resetBallOnPaddle();
+  state = 'play';
   bigFloater('LEVEL '+level+'!', W/2, H/2, '#3fd2ff');
   flash = 0.6; flashColor='80,220,255';
   for(let i=0;i<60;i++) spawnParticle(Math.random()*W, Math.random()*H*0.6, COLORS[i%6], 6);
   beep(523,0.1); setTimeout(()=>beep(659,0.1),80); setTimeout(()=>beep(880,0.15),160);
+}
+
+function startReveal(){
+  state = 'reveal';
+  revealTimer = 1.8;
+  balls = []; powerups = []; combo = 0;
+  flash = 0.6; flashColor = '255,210,63';
+  bigFloater('CLEAR!', W/2, regionTop - 18, '#ffd23f');
+  bigFloater(currentAnimal.name + ' だ！', W/2, regionBottom + 46, '#46ff9c');
+  noiseBurst(0.2, 0.2);
+  beep(523,0.1); setTimeout(()=>beep(659,0.1),100); setTimeout(()=>beep(784,0.1),200); setTimeout(()=>beep(1047,0.2),300);
+  const cy = (regionTop+regionBottom)/2;
+  for(let i=0;i<60;i++) spawnParticle(W*0.2+Math.random()*W*0.6, cy, COLORS[i%6], 1, 8);
 }
 
 // ---------- Effects ----------
@@ -348,6 +499,15 @@ function update(dt){
   paddle.targetX = Math.max(paddle.w/2, Math.min(W-paddle.w/2, paddle.targetX));
   paddle.x += (paddle.targetX - paddle.x) * 0.35;
 
+  if(state==='reveal'){
+    revealTimer -= dt;
+    if(Math.random()<0.4){
+      const x = regionTop && (W*0.15 + Math.random()*W*0.7);
+      spawnParticle(x, regionTop + Math.random()*(regionBottom-regionTop), COLORS[(Math.random()*6)|0], 1, 5);
+    }
+    if(revealTimer<=0) nextLevel();
+    decayEffects(); return;
+  }
   if(state!=='play'){ decayEffects(); return; }
 
   // combo timer
@@ -418,8 +578,8 @@ function update(dt){
     if(p.y > H+30) powerups.splice(i,1);
   }
 
-  // win?
-  if(bricks.every(br=>!br.alive)) { nextLevel(); }
+  // win? -> reveal the full animal before next level
+  if(bricks.every(br=>!br.alive)) { startReveal(); }
 
   decayEffects();
 }
@@ -529,6 +689,25 @@ function draw(){
   for(let y=0;y<H;y+=40){ ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(W,y);ctx.stroke(); }
 
   ctx.translate(sx,sy);
+
+  // ---- hidden animal: dark curtain + revealed patches behind bricks ----
+  if(bricks.length){
+    ctx.fillStyle = 'rgba(6,3,16,0.93)';
+    ctx.fillRect(0, regionTop, W, regionBottom - regionTop);
+    // faint silhouette to tease what's underneath
+    ctx.globalAlpha = 0.07;
+    ctx.drawImage(picCanvas, 0,0, picCanvas.width, picCanvas.height, 0,0, W, PICH);
+    ctx.globalAlpha = 1;
+    // reveal where bricks are already broken
+    for(const br of bricks){
+      if(br.alive) continue;
+      ctx.save();
+      roundRect(br.x-3, br.y-3, br.w+6, br.h+6, 4);
+      ctx.clip();
+      ctx.drawImage(picCanvas, 0,0, picCanvas.width, picCanvas.height, 0,0, W, PICH);
+      ctx.restore();
+    }
+  }
 
   // bricks
   for(const br of bricks){
